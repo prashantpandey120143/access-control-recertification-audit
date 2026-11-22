@@ -1,0 +1,856 @@
+{
+  "name": "Access Control Recertification Audit",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "id": "e9a58dc7-06c6-45fc-800e-9b866b227102",
+      "name": "Daily Audit Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Live Google Drive input configuration. This folder is searched on every execution.\n// Replace both placeholders with the folder IDs from your Drive URLs (/drive/folders/<ID>).\nconst cfg = {\n  inputFolderId: 'REPLACE_WITH_INPUT_FOLDER_ID',\n\n  // Audit policy rules (not sample input records).\n  sodRules: [\n    {\n      id: 'SOD1',\n      roles: ['Finance_Approver', 'Finance_Initiator'],\n      description: 'Cannot initiate and approve payments'\n    }\n  ],\n\n  outputFilePrefix: 'access-control-audit',\n  outputFolderId: 'REPLACE_WITH_OUTPUT_FOLDER_ID'\n};\nreturn [{ json: cfg }];"
+      },
+      "id": "f755989f-6c71-458e-909d-636edb7601cf",
+      "name": "Audit Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        760
+      ],
+      "notesInFlow": true,
+      "notes": "Set inputFolderId and outputFolderId to your own Google Drive folders. On every execution the workflow searches the input folder for the three exact CSV filenames and downloads the newest match."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Validate the live Google Drive folder configuration.\n// This node contains no A1-range parsing and only validates the folder configuration.\nconst incoming = $input.all();\nif (!incoming.length || !incoming[0].json) {\n  throw new Error('CONFIGURATION INPUT MISSING: connect this node directly after Audit Configuration and run the workflow from the beginning.');\n}\nconst c = incoming[0].json;\nconst errors = [];\nconst folderId = String(c.inputFolderId ?? '').trim();\nif (!folderId || folderId.startsWith('REPLACE_WITH_')) {\n  errors.push('inputFolderId is not configured. Open Audit Configuration and paste the ID from your Google Drive INPUT folder URL.');\n} else if (!/^[A-Za-z0-9_-]{10,}$/.test(folderId)) {\n  errors.push('inputFolderId does not look like a valid Google Drive folder ID. Copy only the folder ID, not the full URL.');\n}\nif (!Array.isArray(c.sodRules) || c.sodRules.length === 0) {\n  errors.push('sodRules must contain at least one audit rule.');\n}\nconst outId = String(c.outputFolderId ?? '').trim();\nif (!outId || outId.startsWith('REPLACE_WITH_')) {\n  errors.push('outputFolderId is not configured. Paste the ID from your Google Drive OUTPUT folder URL.');\n}\nif (!String(c.outputFilePrefix ?? '').trim()) {\n  errors.push('outputFilePrefix is required.');\n}\nif (errors.length) {\n  throw new Error('CONFIGURATION VALIDATION FAILED: ' + errors.join(' | '));\n}\nreturn [{ json: c }];"
+      },
+      "id": "e9d200e2-0aaf-4e09-94d2-baca7bba938e",
+      "name": "Validate Input Folder Configuration (Code)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -440,
+        760
+      ],
+      "notesInFlow": true,
+      "notes": "Validates the configured Google Drive input folder ID. This workflow uses a current folder ID supplied by the user and does not rely on fixed source CSV IDs or sample data."
+    },
+    {
+      "parameters": {
+        "functionCode": "function normKey(value) {\n  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\n}\nfunction inputRows() {\n  return $input.all().flatMap(item => {\n    const j = item.json || {};\n    if (Array.isArray(j.rows)) return j.rows;\n    if (j.row && typeof j.row === 'object') return [j.row];\n    return [j];\n  });\n}\nfunction cell(row, aliases, index) {\n  if (Array.isArray(row)) return row[index] ?? '';\n  const entries = Object.entries(row || {});\n  for (const alias of aliases) {\n    const wanted = normKey(alias);\n    const found = entries.find(([key]) => normKey(key) === wanted);\n    if (found) return found[1] ?? '';\n  }\n  // Also support CSV parser output with numeric column keys.\n  return row?.[String(index)] ?? '';\n}\nconst rows = inputRows();\nconst seen = new Set();\nconst out = [];\nfor (const r of rows) {\n  const user = String(cell(r, ['User', 'Email', 'User Email', 'Username', 'User Name', 'User ID', 'UPN', 'Account'], 0)).trim().toLowerCase();\n  const role = String(cell(r, ['Role', 'Assigned Role', 'Access Role', 'Role Name'], 1)).trim();\n  if (!user || !role) continue;\n  const key = user + '|' + role.toLowerCase();\n  if (seen.has(key)) continue;\n  seen.add(key);\n  out.push({ user, role });\n}\nif (!out.length) {\n  throw new Error('UserAccess.csv produced no usable records. Expected columns similar to User and Role, with a header row.');\n}\nreturn [{ json: { source: 'userAccess', rows: out } }];"
+      },
+      "id": "1a9dab7c-5fc6-4087-aa12-e72e9422ba05",
+      "name": "Normalize UserAccess",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "function normKey(value) {\n  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\n}\nfunction inputRows() {\n  return $input.all().flatMap(item => {\n    const j = item.json || {};\n    if (Array.isArray(j.rows)) return j.rows;\n    if (j.row && typeof j.row === 'object') return [j.row];\n    return [j];\n  });\n}\nfunction cell(row, aliases, index) {\n  if (Array.isArray(row)) return row[index] ?? '';\n  const entries = Object.entries(row || {});\n  for (const alias of aliases) {\n    const wanted = normKey(alias);\n    const found = entries.find(([key]) => normKey(key) === wanted);\n    if (found) return found[1] ?? '';\n  }\n  return row?.[String(index)] ?? '';\n}\nconst rows = inputRows();\nconst map = new Map();\nfor (const r of rows) {\n  const user = String(cell(r, ['User', 'Email', 'User Email', 'Username', 'User Name', 'User ID', 'UPN', 'Account'], 0)).trim().toLowerCase();\n  const rawStatus = String(cell(r, ['Status', 'Employment Status', 'User Status', 'Employee Status', 'Account Status'], 1)).trim();\n  if (user) {\n    const status = rawStatus.toLowerCase() === 'terminated' ? 'Terminated' : (rawStatus || 'Unknown');\n    map.set(user, status);\n  }\n}\nif (!map.size) {\n  throw new Error('HRTermination.csv produced no usable records. Expected columns similar to User and Status, with a header row.');\n}\nreturn [{ json: { source: 'hr', rows: [...map.entries()].map(([user, status]) => ({ user, status })) } }];"
+      },
+      "id": "f43d71da-d154-4a88-8426-4320b8f50917",
+      "name": "Normalize HRTermination",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "function normKey(value) {\n  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\n}\nfunction inputRows() {\n  return $input.all().flatMap(item => {\n    const j = item.json || {};\n    if (Array.isArray(j.rows)) return j.rows;\n    if (j.row && typeof j.row === 'object') return [j.row];\n    return [j];\n  });\n}\nfunction cell(row, aliases, index) {\n  if (Array.isArray(row)) return row[index] ?? '';\n  const entries = Object.entries(row || {});\n  for (const alias of aliases) {\n    const wanted = normKey(alias);\n    const found = entries.find(([key]) => normKey(key) === wanted);\n    if (found) return found[1] ?? '';\n  }\n  return row?.[String(index)] ?? '';\n}\nconst rows = inputRows();\nconst roles = new Map();\nfor (const r of rows) {\n  const role = String(cell(r, ['Role', 'Role Name', 'Access Role', 'Assigned Role'], 0)).trim();\n  const permission = String(cell(r, ['Permission', 'Permissions', 'Permission Name', 'Entitlement', 'Access'], 1)).trim();\n  if (!role) continue;\n  const key = role.toLowerCase();\n  if (!roles.has(key)) roles.set(key, { role, permissions: new Set() });\n  if (permission) roles.get(key).permissions.add(permission);\n}\nif (!roles.size) {\n  throw new Error('RBACMatrix.csv produced no usable records. Expected columns similar to Role and Permission, with a header row.');\n}\nreturn [{ json: { source: 'rbac', roles: [...roles.values()].map(x => ({ role: x.role, permissions: [...x.permissions] })) } }];"
+      },
+      "id": "af7ee2f6-fa7b-45a7-9d44-fa3feb28fc96",
+      "name": "Normalize RBACMatrix",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        1080
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "fecd6b6c-ab3b-4fd7-9758-c45d9ac3d92a",
+      "name": "Merge UserAccess + HR",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [
+        640,
+        520
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "7e3d137c-bb37-44e4-9100-7e72f3d82f23",
+      "name": "Merge + RBAC",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [
+        880,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const all = $input.all().map(i => i.json || {});\nconst access = all.find(x => x.source === 'userAccess')?.rows || [];\nconst hr = all.find(x => x.source === 'hr')?.rows || [];\nconst rbac = all.find(x => x.source === 'rbac')?.roles || [];\nconst statusByUser = new Map(hr.map(x => [x.user, x.status]));\nconst rolesByUser = new Map();\nfor (const x of access) {\n  if (!rolesByUser.has(x.user)) rolesByUser.set(x.user, new Set());\n  rolesByUser.get(x.user).add(x.role);\n}\nif (!access.length) throw new Error('UserAccess.csv has no usable records. Audit stopped.');\nif (!hr.length) throw new Error('HRTermination.csv has no usable records. Audit stopped.');\nif (!rbac.length) throw new Error('RBACMatrix.csv has no usable records. Audit stopped.');\nconst inputSources = {\n  UserAccess: { fileName: $node['Select Latest UserAccess.csv'].json.name, fileId: $node['Select Latest UserAccess.csv'].json.id, modifiedTime: $node['Select Latest UserAccess.csv'].json.modifiedTime, parsedRecords: access.length },\n  HRTermination: { fileName: $node['Select Latest HRTermination.csv'].json.name, fileId: $node['Select Latest HRTermination.csv'].json.id, modifiedTime: $node['Select Latest HRTermination.csv'].json.modifiedTime, parsedRecords: hr.length },\n  RBACMatrix: { fileName: $node['Select Latest RBACMatrix.csv'].json.name, fileId: $node['Select Latest RBACMatrix.csv'].json.id, modifiedTime: $node['Select Latest RBACMatrix.csv'].json.modifiedTime, parsedRecords: rbac.length }\n};\nconst users = [...rolesByUser.entries()].map(([user, set]) => ({\n  user, roles: [...set], status: statusByUser.get(user) || 'Unknown', rbac, inputSources\n}));\nif (!users.length) throw new Error('Validation failed: UserAccess.csv contains no valid User/Role records.');\nreturn users.map(u => ({ json: u }));"
+      },
+      "id": "cb7fc832-e846-40c1-9577-acc1842d9b0f",
+      "name": "Build Per-User Records",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "f7d5360f-033d-47f2-b440-d0d1c64e2c80",
+      "name": "Split Users into Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1360,
+        760
+      ],
+      "notesInFlow": true,
+      "notes": "Current Loop Over Items behavior: output 0 = Done/completed items; output 1 = Loop. Output 0 connects ONLY to Format Final Report. Output 1 connects ONLY to Termination Check."
+    },
+    {
+      "parameters": {
+        "functionCode": "const u=$json; const violations=u.status==='Terminated'&&u.roles.length?[{type:'TerminatedActive',user:u.user,roles:u.roles,explanation:`User ${u.user} is marked Terminated in HR but still has active roles: ${u.roles.join(', ')}.`}]:[]; return [{json:{...u,violations}}];"
+      },
+      "id": "5819ba34-5c4a-4f10-ae58-e457092293f0",
+      "name": "Termination Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const u=$json; const allowed=new Set((u.rbac||[]).map(x=>String(x.role).trim().toLowerCase())); const missing=u.roles.filter(r=>!allowed.has(String(r).trim().toLowerCase())); const violations=missing.length?[{type:'RoleMismatch',user:u.user,roles:u.roles,missing_roles:missing,explanation:`User ${u.user} has role assignment(s) not present in the RBAC matrix: ${missing.join(', ')}.`}]:[]; return [{json:{...u,violations:[...(u.violations||[]),...violations]}}];"
+      },
+      "id": "9e55d208-b484-43cf-a0ef-4ead3f88b8cf",
+      "name": "RBAC Conformance Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1840,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const u=$json; const roleSet=new Set(u.roles.map(r=>String(r).trim().toLowerCase())); const rules=$node['Audit Configuration'].json.sodRules||[]; const conflicts=[]; for(const rule of rules){const roles=(rule.roles||[]).map(String); if(roles.length&&roles.every(r=>roleSet.has(r.trim().toLowerCase()))){conflicts.push({type:'SoDConflict',user:u.user,conflicting_roles:roles,rule_id:rule.id,description:rule.description,explanation:`User ${u.user} has conflicting roles (${roles.join(' + ')}): ${rule.description||'SoD rule violation'}.`});}} return [{json:{...u,violations:[...(u.violations||[]),...conflicts]}}];"
+      },
+      "id": "f1fad251-6054-413f-bed4-acfb0e26ffb1",
+      "name": "SoD Check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2080,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate the actual users processed in this run and include an input-source manifest.\nconst items = $input.all();\nif (!items.length) throw new Error('Final report received no completed user records.');\nconst users = items.map((item,index) => {\n  const u = item.json;\n  if (!u || !u.user) throw new Error(`Final report received an invalid user record at item ${index}.`);\n  return { user: String(u.user), roles: Array.isArray(u.roles) ? u.roles : [], status: u.status ?? 'Unknown', violations: Array.isArray(u.violations) ? u.violations : [], inputSources: u.inputSources || {} };\n});\nconst seenUsers = new Set();\nfor (const u of users) {\n  if (seenUsers.has(u.user)) throw new Error(`Final report received duplicate completed user: ${u.user}`);\n  seenUsers.add(u.user);\n}\nconst violations = users.flatMap(u => u.violations);\nconst terminated_active = violations.filter(v => v.type === 'TerminatedActive').map(v => ({ user:v.user, roles:v.roles||[], explanation:v.explanation||'' }));\nconst role_mismatch = violations.filter(v => v.type === 'RoleMismatch').map(v => ({ user:v.user, roles:v.roles||[], missing_roles:v.missing_roles||[], explanation:v.explanation||'' }));\nconst sod_conflicts = violations.filter(v => v.type === 'SoDConflict').map(v => ({ user:v.user, conflicting_roles:v.conflicting_roles||[], rule_id:v.rule_id||'', description:v.description||'', explanation:v.explanation||'' }));\nconst summary = { processed_users:users.length, terminated_active:terminated_active.length, role_mismatch:role_mismatch.length, sod_conflicts:sod_conflicts.length, total_violations:violations.length };\nconst runTimestamp = new Date().toISOString();\nconst inputSources = users[0].inputSources || {};\nconst headers = ['RecordType','ViolationType','User','Roles','MissingRoles','ConflictingRoles','RuleID','Description','Explanation','Count','SourceFile','SourceFileId','SourceModifiedTime','SourceRecordCount','RunTimestamp'];\nfunction csvEscape(value) {\n  const text = Array.isArray(value) ? value.join('; ') : (value === null || value === undefined ? '' : String(value));\n  return '\"' + text.replace(/\"/g, '\"\"') + '\"';\n}\nconst rows = [headers];\nfor (const [sourceName, source] of Object.entries(inputSources)) {\n  rows.push(['SOURCE','INPUT_FILE','','','','','',`Loaded ${sourceName} input`,'','',source.fileName,source.fileId,source.modifiedTime,source.parsedRecords,runTimestamp]);\n}\nfor (const v of terminated_active) rows.push(['VIOLATION','TerminatedActive',v.user,v.roles,'','','','Terminated user still has active access',v.explanation,'','','','','',runTimestamp]);\nfor (const v of role_mismatch) rows.push(['VIOLATION','RoleMismatch',v.user,v.roles,v.missing_roles,'','','Assigned role is missing from RBAC matrix',v.explanation,'','','','','',runTimestamp]);\nfor (const v of sod_conflicts) rows.push(['VIOLATION','SoDConflict',v.user,'','',v.conflicting_roles,v.rule_id,v.description,v.explanation,'','','','','',runTimestamp]);\nrows.push(['SUMMARY','PROCESSED_USERS','','','','','','Total users processed','',summary.processed_users,'','','','',runTimestamp]);\nrows.push(['SUMMARY','TerminatedActive','','','','','','Total terminated users with active access','',summary.terminated_active,'','','','',runTimestamp]);\nrows.push(['SUMMARY','RoleMismatch','','','','','','Total role assignments missing from RBAC matrix','',summary.role_mismatch,'','','','',runTimestamp]);\nrows.push(['SUMMARY','SoDConflict','','','','','','Total segregation-of-duties conflicts','',summary.sod_conflicts,'','','','',runTimestamp]);\nrows.push(['SUMMARY','TOTAL','','','','','','Total audit violations','',summary.total_violations,'','','','',runTimestamp]);\nconst csv_content = rows.map(row => row.map(csvEscape).join(',')).join('\\r\\n');\nreturn [{ json: { csv_content, report: { users, terminated_active, role_mismatch, sod_conflicts, summary, inputSources, runTimestamp }, summary, inputSources, runTimestamp } }];"
+      },
+      "id": "9edd6f85-aa73-4249-9e69-d53fdc32df3c",
+      "name": "Format Final Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "csv_content",
+        "options": {
+          "encoding": "utf8",
+          "fileName": "={{$node['Audit Configuration'].json.outputFilePrefix + '_' + new Date().toISOString().replace(/[:.]/g,'-') + '.csv'}}"
+        }
+      },
+      "id": "86704466-1589-4ce1-bfa2-40a22fd9683b",
+      "name": "Convert Report to CSV File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1840,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{$binary.data.fileName}}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$node['Audit Configuration'].json.outputFolderId}}"
+        },
+        "options": {}
+      },
+      "id": "31451301-36c3-4e0c-af8f-81a4666e42f0",
+      "name": "Save Audit CSV to Output Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2080,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "binaryPropertyName": "data",
+        "options": {
+          "delimiter": ",",
+          "headerRow": true,
+          "enableBOM": true,
+          "encoding": "utf8"
+        }
+      },
+      "id": "f93d4074-db1a-41ab-9a43-1679a3e84309",
+      "name": "Extract UserAccess CSV",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        160,
+        320
+      ],
+      "notesInFlow": true,
+      "notes": "Parses the downloaded CSV binary into one JSON item per CSV data row, using the first row as column headers."
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "binaryPropertyName": "data",
+        "options": {
+          "delimiter": ",",
+          "headerRow": true,
+          "enableBOM": true,
+          "encoding": "utf8"
+        }
+      },
+      "id": "6bdfa897-8b1c-4650-a6e2-02716c0fab99",
+      "name": "Extract HRTermination CSV",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        160,
+        700
+      ],
+      "notesInFlow": true,
+      "notes": "Parses the downloaded CSV binary into one JSON item per CSV data row, using the first row as column headers."
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "binaryPropertyName": "data",
+        "options": {
+          "delimiter": ",",
+          "headerRow": true,
+          "enableBOM": true,
+          "encoding": "utf8"
+        }
+      },
+      "id": "a203ae76-5719-49ef-b959-f3886114af83",
+      "name": "Extract RBACMatrix CSV",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        160,
+        1080
+      ],
+      "notesInFlow": true,
+      "notes": "Parses the downloaded CSV binary into one JSON item per CSV data row, using the first row as column headers."
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "searchMethod": "query",
+        "queryString": "={{ \"'\" + $node['Audit Configuration'].json.inputFolderId + \"' in parents and name = 'UserAccess.csv' and trashed = false\" }}",
+        "returnAll": true,
+        "filter": {
+          "whatToSearch": "files"
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType",
+            "modifiedTime",
+            "parents",
+            "trashed"
+          ]
+        }
+      },
+      "id": "42d9a698-8e21-4b10-9a16-8ce6d7f55f7a",
+      "name": "Search UserAccess.csv in Input Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -520,
+        300
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "notes": "Searches the configured input folder at runtime for the exact CSV filename. If missing, downstream selector throws a clear error and the audit cannot produce a report."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Select the most recently modified exact-name file from the configured input folder.\n// The upstream Search node is set to Always Output Data so a missing file reaches this explicit check.\nconst candidates = $input.all()\n  .map(item => item.json || {})\n  .filter(file => file.id && file.name === 'UserAccess.csv' && file.trashed !== true);\nif (!candidates.length) {\n  throw new Error('INPUT FILE MISSING: UserAccess.csv was not found in the configured Input Folder. No audit report will be generated.');\n}\ncandidates.sort((a, b) => Date.parse(b.modifiedTime || 0) - Date.parse(a.modifiedTime || 0));\nconst selected = candidates[0];\nreturn [{ json: { id: selected.id, name: selected.name, mimeType: selected.mimeType || '', modifiedTime: selected.modifiedTime || '' } }];"
+      },
+      "id": "83c5b317-295b-4f60-a4bc-d26cb6e99bf1",
+      "name": "Select Latest UserAccess.csv",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        300
+      ],
+      "notesInFlow": true,
+      "notes": "Selects the latest modified UserAccess.csv; missing files stop the workflow instead of allowing stale output."
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{$json.id}}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "512ffdd4-c588-417b-906e-357d168612bf",
+      "name": "Download UserAccess.csv from Input Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "notes": "Downloads the file ID returned by 'Select Latest UserAccess.csv' at runtime. No source ID is hard-coded in this node."
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "searchMethod": "query",
+        "queryString": "={{ \"'\" + $node['Audit Configuration'].json.inputFolderId + \"' in parents and name = 'HRTermination.csv' and trashed = false\" }}",
+        "returnAll": true,
+        "filter": {
+          "whatToSearch": "files"
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType",
+            "modifiedTime",
+            "parents",
+            "trashed"
+          ]
+        }
+      },
+      "id": "58af1665-7e65-440c-adb6-e750075a2012",
+      "name": "Search HRTermination.csv in Input Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -520,
+        660
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "notes": "Searches the configured input folder at runtime for the exact CSV filename. If missing, downstream selector throws a clear error and the audit cannot produce a report."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Select the most recently modified exact-name file from the configured input folder.\n// The upstream Search node is set to Always Output Data so a missing file reaches this explicit check.\nconst candidates = $input.all()\n  .map(item => item.json || {})\n  .filter(file => file.id && file.name === 'HRTermination.csv' && file.trashed !== true);\nif (!candidates.length) {\n  throw new Error('INPUT FILE MISSING: HRTermination.csv was not found in the configured Input Folder. No audit report will be generated.');\n}\ncandidates.sort((a, b) => Date.parse(b.modifiedTime || 0) - Date.parse(a.modifiedTime || 0));\nconst selected = candidates[0];\nreturn [{ json: { id: selected.id, name: selected.name, mimeType: selected.mimeType || '', modifiedTime: selected.modifiedTime || '' } }];"
+      },
+      "id": "3d872970-d487-4117-bdb3-ab8c83b575a8",
+      "name": "Select Latest HRTermination.csv",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        660
+      ],
+      "notesInFlow": true,
+      "notes": "Selects the latest modified HRTermination.csv; missing files stop the workflow instead of allowing stale output."
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{$json.id}}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "02924991-a2d1-4d50-a962-a509d03716ef",
+      "name": "Download HRTermination.csv from Input Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        660
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "notes": "Downloads the file ID returned by 'Select Latest HRTermination.csv' at runtime. No source ID is hard-coded in this node."
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "searchMethod": "query",
+        "queryString": "={{ \"'\" + $node['Audit Configuration'].json.inputFolderId + \"' in parents and name = 'RBACMatrix.csv' and trashed = false\" }}",
+        "returnAll": true,
+        "filter": {
+          "whatToSearch": "files"
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType",
+            "modifiedTime",
+            "parents",
+            "trashed"
+          ]
+        }
+      },
+      "id": "63fd82a3-1b6d-4d65-bb3c-925113ad28f9",
+      "name": "Search RBACMatrix.csv in Input Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -520,
+        1020
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "notes": "Searches the configured input folder at runtime for the exact CSV filename. If missing, downstream selector throws a clear error and the audit cannot produce a report."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Select the most recently modified exact-name file from the configured input folder.\n// The upstream Search node is set to Always Output Data so a missing file reaches this explicit check.\nconst candidates = $input.all()\n  .map(item => item.json || {})\n  .filter(file => file.id && file.name === 'RBACMatrix.csv' && file.trashed !== true);\nif (!candidates.length) {\n  throw new Error('INPUT FILE MISSING: RBACMatrix.csv was not found in the configured Input Folder. No audit report will be generated.');\n}\ncandidates.sort((a, b) => Date.parse(b.modifiedTime || 0) - Date.parse(a.modifiedTime || 0));\nconst selected = candidates[0];\nreturn [{ json: { id: selected.id, name: selected.name, mimeType: selected.mimeType || '', modifiedTime: selected.modifiedTime || '' } }];"
+      },
+      "id": "1bdb52e5-c225-4b90-ae28-5b1761303b66",
+      "name": "Select Latest RBACMatrix.csv",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        1020
+      ],
+      "notesInFlow": true,
+      "notes": "Selects the latest modified RBACMatrix.csv; missing files stop the workflow instead of allowing stale output."
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{$json.id}}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "522ac8ec-8cf0-4f0b-bf37-467f2b39c1bd",
+      "name": "Download RBACMatrix.csv from Input Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        1020
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "notes": "Downloads the file ID returned by 'Select Latest RBACMatrix.csv' at runtime. No source ID is hard-coded in this node."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Audit Trigger": {
+      "main": [
+        [
+          {
+            "node": "Audit Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit Configuration": {
+      "main": [
+        [
+          {
+            "node": "Validate Input Folder Configuration (Code)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract UserAccess CSV": {
+      "main": [
+        [
+          {
+            "node": "Normalize UserAccess",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract HRTermination CSV": {
+      "main": [
+        [
+          {
+            "node": "Normalize HRTermination",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract RBACMatrix CSV": {
+      "main": [
+        [
+          {
+            "node": "Normalize RBACMatrix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize UserAccess": {
+      "main": [
+        [
+          {
+            "node": "Merge UserAccess + HR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize HRTermination": {
+      "main": [
+        [
+          {
+            "node": "Merge UserAccess + HR",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge UserAccess + HR": {
+      "main": [
+        [
+          {
+            "node": "Merge + RBAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize RBACMatrix": {
+      "main": [
+        [
+          {
+            "node": "Merge + RBAC",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge + RBAC": {
+      "main": [
+        [
+          {
+            "node": "Build Per-User Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Per-User Records": {
+      "main": [
+        [
+          {
+            "node": "Split Users into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Users into Batches": {
+      "main": [
+        [
+          {
+            "node": "Format Final Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termination Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termination Check": {
+      "main": [
+        [
+          {
+            "node": "RBAC Conformance Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RBAC Conformance Check": {
+      "main": [
+        [
+          {
+            "node": "SoD Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SoD Check": {
+      "main": [
+        [
+          {
+            "node": "Split Users into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Final Report": {
+      "main": [
+        [
+          {
+            "node": "Convert Report to CSV File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Report to CSV File": {
+      "main": [
+        [
+          {
+            "node": "Save Audit CSV to Output Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search UserAccess.csv in Input Folder": {
+      "main": [
+        [
+          {
+            "node": "Select Latest UserAccess.csv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Latest UserAccess.csv": {
+      "main": [
+        [
+          {
+            "node": "Download UserAccess.csv from Input Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download UserAccess.csv from Input Folder": {
+      "main": [
+        [
+          {
+            "node": "Extract UserAccess CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search HRTermination.csv in Input Folder": {
+      "main": [
+        [
+          {
+            "node": "Select Latest HRTermination.csv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Latest HRTermination.csv": {
+      "main": [
+        [
+          {
+            "node": "Download HRTermination.csv from Input Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download HRTermination.csv from Input Folder": {
+      "main": [
+        [
+          {
+            "node": "Extract HRTermination CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search RBACMatrix.csv in Input Folder": {
+      "main": [
+        [
+          {
+            "node": "Select Latest RBACMatrix.csv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Latest RBACMatrix.csv": {
+      "main": [
+        [
+          {
+            "node": "Download RBACMatrix.csv from Input Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download RBACMatrix.csv from Input Folder": {
+      "main": [
+        [
+          {
+            "node": "Extract RBACMatrix CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input Folder Configuration (Code)": {
+      "main": [
+        [
+          {
+            "node": "Search UserAccess.csv in Input Folder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search HRTermination.csv in Input Folder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search RBACMatrix.csv in Input Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Reads UserAccess.csv, HRTermination.csv, and RBACMatrix.csv dynamically from the configured Google Drive input folder on every execution. Missing inputs stop the workflow; source-file provenance is written into the report."
+  },
+  "nodeGroups": [],
+  "tags": []
+}

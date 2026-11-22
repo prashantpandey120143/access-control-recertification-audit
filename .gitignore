@@ -1,0 +1,13 @@
+# Never commit real exports, credentials or personal data
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+n8n-export-*.json
+real_data/
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

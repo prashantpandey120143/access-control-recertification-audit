@@ -1,0 +1,12 @@
+Role,Permission
+Finance_Approver,approve_payment
+Finance_Initiator,initiate_payment
+Finance_Admin,admin_finance
+HR_Read,read_hr
+HR_Admin,admin_hr
+IT_Support,reset_password
+IT_Support,view_tickets
+Procurement_Buyer,create_purchase_order
+Report_Viewer,view_reports
+Sales_Rep,manage_own_accounts
+Sales_Rep,view_pipeline
